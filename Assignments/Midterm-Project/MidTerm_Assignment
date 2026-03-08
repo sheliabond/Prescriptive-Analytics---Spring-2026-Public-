@@ -1,0 +1,1327 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/sheliabond/Prescriptive-Analytics---Spring-2026-Public-/blob/main/Assignments/Midterm-Project/MidTerm_Assignment\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "b85679a0",
+      "metadata": {
+        "id": "b85679a0"
+      },
+      "source": [
+        "# Mid-Term Project: Multi-Constraint Portfolio Allocation\n",
+        "\n",
+        "**Student Name:** [Your Name]\n",
+        "**Date:** [Date]\n",
+        "**Chosen context:** [e.g. Marketing – ad spend across channels]\n",
+        "**Field:** [Your professional field]\n",
+        "\n",
+        "## Project Overview\n",
+        "\n",
+        "You will choose a resource allocation problem in your field, create a synthetic dataset with **8–10 options**, build a **multi-constraint optimization model**, explore **near-optimal alternatives**, run deep sensitivity analysis and validation, then respond to **two stakeholder changes of mind**. The deliverable is one notebook with clear documentation and an executive summary suitable to hand off to a manager.\n",
+        "\n",
+        "**Learning Objectives:**\n",
+        "- Build a multi-constraint continuous LP in PuLP (budget cap, category coverage, concentration cap)\n",
+        "- Diagnose and handle infeasibility when constraints interact\n",
+        "- Identify near-optimal alternative solutions and explain why they might be preferred\n",
+        "- Perform sensitivity analysis across 5 parameters at ±20% and ±40%\n",
+        "- Apply extreme value testing and one additional what-if scenario\n",
+        "- Validate the solution with sanity checks and a fragile vs. robust assessment\n",
+        "- Respond to two stakeholder changes of mind with updated models and a three-way comparison\n",
+        "- Communicate findings in an executive summary suitable for a non-technical decision-maker"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b8dfb5cd",
+      "metadata": {
+        "id": "b8dfb5cd"
+      },
+      "outputs": [],
+      "source": [
+        "# Install required packages (if needed in Colab)\n",
+        "# Skip if running locally and packages are already installed\n",
+        "%pip install pulp pandas matplotlib numpy -q"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "9065a4a0",
+      "metadata": {
+        "id": "9065a4a0"
+      },
+      "outputs": [],
+      "source": [
+        "import pandas as pd\n",
+        "import numpy as np\n",
+        "import matplotlib.pyplot as plt\n",
+        "from pulp import LpMaximize, LpMinimize, LpProblem, LpVariable, lpSum, value, LpStatus, PULP_CBC_CMD\n",
+        "import io\n",
+        "\n",
+        "print(\"Libraries imported successfully!\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "554d8624",
+      "metadata": {
+        "id": "554d8624"
+      },
+      "source": [
+        "---\n",
+        "## Creating Your Synthetic Dataset\n",
+        "\n",
+        "Your dataset must have **8–10 rows** (one row per option) and **4 columns**:\n",
+        "\n",
+        "1. **option** — a name or label for each option (e.g. \"Channel_A\", \"Program_ICU\")\n",
+        "2. **category** — which of exactly **3 logical groups** this option belongs to (e.g. \"Paid\", \"Organic\", \"Brand\"). Every option must belong to one group. You must have at least one option per group.\n",
+        "3. **benefit_rate** — the expected return per unit allocated. This is the coefficient in your objective function. Use a decimal (e.g. 0.04 = 4 cents returned per dollar spent).\n",
+        "4. **[your_field_column]** — one additional numeric attribute meaningful in your field (e.g. `quality_score`, `risk_rating`, `reach_index`). Rename this column to match your context.\n",
+        "\n",
+        "You will also set **three global constraint values** in your code (not in the CSV):\n",
+        "\n",
+        "- `budget_total` — total resource available (e.g. $50,000 or 2,000 staff-hours)\n",
+        "- `min_alloc_per_category` — minimum each of the 3 categories must receive (ensures balanced portfolio)\n",
+        "- `concentration_cap` — maximum fraction any single option can receive (e.g. 0.35 = no option gets more than 35% of the total budget)\n",
+        "\n",
+        "**Feasibility check before you start:** Confirm that `min_alloc_per_category × 3 < budget_total` and `concentration_cap × budget_total > min_alloc_per_category`. If not, your model will be infeasible immediately — adjust the values.\n",
+        "\n",
+        "**Step-by-step LLM prompt:**\n",
+        "\n",
+        "1. Open a **new** conversation with ChatGPT, Claude, or Copilot.\n",
+        "2. Say: \"I need a synthetic dataset for a prescriptive analytics portfolio allocation problem. I will use Python with pandas and PuLP. I need the output as **CSV only**.\"\n",
+        "3. Tell it your field: \"I am modeling [your decision, e.g. 'marketing ad spend across channels'].\"\n",
+        "4. Say: \"Create a CSV with **exactly [8, 9, or 10] rows** and these exact columns: `option` (name), `category` (one of exactly 3 groups — use these names: [name your 3 groups]), `benefit_rate` (decimal, e.g. 0.02 to 0.09, realistic for my context), `[your_field_column]` (numeric, realistic). Use realistic but simple numbers. Also give me three constraint values: `budget_total`, `min_alloc_per_category`, `concentration_cap`. Output only the CSV and the three values; no other text.\"\n",
+        "5. Copy the CSV and paste it below. Set the three constraint values in the code cell."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "fc43b24a",
+      "metadata": {
+        "id": "fc43b24a"
+      },
+      "outputs": [],
+      "source": [
+        "# Paste your CSV here and set the three constraint values.\n",
+        "# Replace the example below with your actual data from the LLM.\n",
+        "\n",
+        "csv_string = \"\"\"\n",
+        "option,category,benefit_rate,quality_score\n",
+        "Channel_A,Paid,0.055,8.2\n",
+        "Channel_B,Paid,0.042,7.5\n",
+        "Channel_C,Paid,0.038,6.9\n",
+        "Channel_D,Organic,0.071,9.1\n",
+        "Channel_E,Organic,0.049,7.8\n",
+        "Channel_F,Organic,0.033,6.4\n",
+        "Channel_G,Brand,0.062,8.8\n",
+        "Channel_H,Brand,0.044,7.1\n",
+        "Channel_I,Brand,0.028,5.9\n",
+        "\"\"\"\n",
+        "\n",
+        "options_df = pd.read_csv(io.StringIO(csv_string.strip()))\n",
+        "\n",
+        "# Three global constraint values — set these based on what the LLM gave you\n",
+        "budget_total         = 50000   # Total resource available (e.g. dollars, hours)\n",
+        "min_alloc_per_category = 5000  # Each category must receive at least this much\n",
+        "concentration_cap    = 0.35    # No single option gets more than this fraction of budget_total\n",
+        "\n",
+        "# Derived check value (used later)\n",
+        "max_single_alloc = concentration_cap * budget_total\n",
+        "\n",
+        "# ── Display ────────────────────────────────────────────────────────────────────\n",
+        "print(options_df.to_string(index=False))\n",
+        "print(f\"\\nNumber of options: {len(options_df)}\")\n",
+        "print(f\"Number of categories: {options_df['category'].nunique()} — {list(options_df['category'].unique())}\")\n",
+        "print(f\"\\nConstraint values:\")\n",
+        "print(f\"  budget_total           = {budget_total:,}\")\n",
+        "print(f\"  min_alloc_per_category = {min_alloc_per_category:,}\")\n",
+        "print(f\"  concentration_cap      = {concentration_cap} (max single option = {max_single_alloc:,.0f})\")\n",
+        "\n",
+        "# Quick feasibility pre-check\n",
+        "feasibility_ok = (min_alloc_per_category * 3 < budget_total) and (max_single_alloc >= min_alloc_per_category)\n",
+        "print(f\"\\nPre-check: {'✓ Constraint values look feasible' if feasibility_ok else '⚠ WARNING: constraint values may cause immediate infeasibility — adjust before proceeding'}\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "0b2f767d",
+      "metadata": {
+        "id": "0b2f767d"
+      },
+      "source": [
+        "**Data documentation (TODO):** In one sentence, state that you used a language model to generate this data, and describe what it contains (number of options, category names, constraint names and values).\n",
+        "\n",
+        "[TODO: Your sentence here.]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "82c0fdf9",
+      "metadata": {
+        "id": "82c0fdf9"
+      },
+      "source": [
+        "---\n",
+        "## Part 1: Problem Framing and Dataset\n",
+        "\n",
+        "### 1.1 Decision Statement\n",
+        "\n",
+        "**Instructions:** Write a clear decision statement in the form: \"I need to decide how to allocate [resource] across [options], subject to [constraints], in order to [objective].\"\n",
+        "\n",
+        "**Your Decision Statement:**\n",
+        "[TODO: Write your decision statement here.]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "c7079397",
+      "metadata": {
+        "id": "c7079397"
+      },
+      "source": [
+        "### 1.2 Decision Variables vs Inputs\n",
+        "\n",
+        "**Instructions:** List your decision variables (what the model determines) and your inputs (what you provide). Briefly explain why each belongs in its category. Note that all decision variables in this model are **continuous** (any non-negative value).\n",
+        "\n",
+        "**Decision Variables (what the model decides):**\n",
+        "[TODO: List here — e.g. \"The amount allocated to each of the 9 channels (alloc_0 through alloc_8)\"]\n",
+        "\n",
+        "**Inputs (what you provide to the model):**\n",
+        "[TODO: List here — e.g. \"benefit_rate for each channel, budget_total, min_alloc_per_category, concentration_cap\"]\n",
+        "\n",
+        "**Explanation:**\n",
+        "[TODO: One or two sentences explaining the distinction.]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "16949841",
+      "metadata": {
+        "id": "16949841"
+      },
+      "source": [
+        "### 1.3 Objectives and Constraints\n",
+        "\n",
+        "**Instructions:** State your objective and all three constraints. For each constraint, label it **hard** and explain in one sentence what happens in the real world if it is violated.\n",
+        "\n",
+        "**Objective:**\n",
+        "[TODO: e.g. \"Maximize total expected benefit (sum of benefit_rate × allocation across all options).\"]\n",
+        "\n",
+        "**Constraint 1 — Budget Cap (hard):**\n",
+        "[TODO: State the constraint and why it is hard. e.g. \"Total allocation across all options cannot exceed $50,000 because the total marketing budget approved for this quarter is fixed.\"]\n",
+        "\n",
+        "**Constraint 2 — Category Coverage (hard):**\n",
+        "[TODO: State the constraint and why it is hard. e.g. \"Each of the three channel categories (Paid, Organic, Brand) must receive at least $5,000 because brand guidelines require presence in all three tiers.\"]\n",
+        "\n",
+        "**Constraint 3 — Concentration Cap (hard):**\n",
+        "[TODO: State the constraint and why it is hard. e.g. \"No single channel may receive more than 35% of the total budget because over-relying on one channel creates unacceptable platform risk.\"]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "f9be866e",
+      "metadata": {
+        "id": "f9be866e"
+      },
+      "source": [
+        "### 1.4 Key Parameters and Uncertainty\n",
+        "\n",
+        "**What are the \"five parameters\"?** They are the inputs you will vary in sensitivity analysis:\n",
+        "\n",
+        "- **Parameter 1:** `benefit_rate` for all options (shift every option’s rate by the same percentage).\n",
+        "- **Parameter 2:** `benefit_rate` for the **top option only** — the single option with the highest `benefit_rate` in your dataset. This represents uncertainty in your best option’s return; the code will vary only this option’s rate.\n",
+        "- **Parameters 3–5:** The three global constraint values (`budget_total`, `min_alloc_per_category`, `concentration_cap`).\n",
+        "\n",
+        "Your dataset’s fourth column (e.g. `quality_score`, `risk_rating`) is still used for context and can appear in this table as supporting documentation, but the second *sensitivity* parameter is always benefit_rate (top option only) so that all five parameters affect the objective.\n",
+        "\n",
+        "**Instructions:** Complete the table below for all 5 parameters.\n",
+        "\n",
+        "| # | Parameter | Source | Why it might differ from reality | Estimated uncertainty |\n",
+        "|---|-----------|--------|-----------------------------------|-----------------------|\n",
+        "| 1 | benefit_rate (all options) | [TODO] | [TODO] | [TODO e.g. ±25%] |\n",
+        "| 2 | benefit_rate (top option only) | [TODO] | [TODO] | [TODO] |\n",
+        "| 3 | budget_total | [TODO] | [TODO] | [TODO] |\n",
+        "| 4 | min_alloc_per_category | [TODO] | [TODO] | [TODO] |\n",
+        "| 5 | concentration_cap | [TODO] | [TODO] | [TODO] |"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "97c015b4",
+      "metadata": {
+        "id": "97c015b4"
+      },
+      "source": [
+        "---\n",
+        "## Part 2: Optimization Model and Near-Optimal Exploration\n",
+        "\n",
+        "### 2.1 Build and Solve the Base Model\n",
+        "\n",
+        "**Instructions:** The code below builds a multi-constraint LP with your three constraints. Adapt the column name `'benefit_rate'` if yours is named differently. Run the cell and check the Status before interpreting results."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b72134f9",
+      "metadata": {
+        "id": "b72134f9"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Base model setup ──────────────────────────────────────────────────────────\n",
+        "n          = len(options_df)\n",
+        "categories = options_df['category'].unique()\n",
+        "benefit_col = 'benefit_rate'   # TODO: confirm this matches your CSV column name\n",
+        "\n",
+        "model_base = LpProblem(\"Portfolio_Base\", LpMaximize)\n",
+        "\n",
+        "# Decision variables: how much to allocate to each option (continuous, ≥ 0)\n",
+        "alloc = [LpVariable(f\"alloc_{i}\", lowBound=0) for i in range(n)]\n",
+        "\n",
+        "# ── Objective ──────────────────────────────────────────────────────────────────\n",
+        "model_base += lpSum([alloc[i] * options_df.iloc[i][benefit_col]\n",
+        "                     for i in range(n)]), \"Total_Benefit\"\n",
+        "\n",
+        "# ── Constraint 1: Budget cap ───────────────────────────────────────────────────\n",
+        "model_base += lpSum(alloc) <= budget_total, \"Budget_Cap\"\n",
+        "\n",
+        "# ── Constraint 2: Category coverage ───────────────────────────────────────────\n",
+        "# Each category must receive at least min_alloc_per_category\n",
+        "for cat in categories:\n",
+        "    cat_idx = options_df.index[options_df['category'] == cat].tolist()\n",
+        "    model_base += (lpSum([alloc[i] for i in cat_idx]) >= min_alloc_per_category,\n",
+        "                   f\"Coverage_{cat}\")\n",
+        "\n",
+        "# ── Constraint 3: Concentration cap ───────────────────────────────────────────\n",
+        "# No single option may receive more than concentration_cap × budget_total\n",
+        "for i in range(n):\n",
+        "    model_base += (alloc[i] <= concentration_cap * budget_total,\n",
+        "                   f\"Cap_{options_df.iloc[i, 0]}\")\n",
+        "\n",
+        "# ── Solve ──────────────────────────────────────────────────────────────────────\n",
+        "model_base.solve(PULP_CBC_CMD(msg=0))\n",
+        "\n",
+        "# ── Results ───────────────────────────────────────────────────────────────────\n",
+        "print(f\"Status: {LpStatus[model_base.status]}\")\n",
+        "print()\n",
+        "\n",
+        "if model_base.status == 1:   # Optimal\n",
+        "    base_allocs = [value(alloc[i]) for i in range(n)]\n",
+        "    base_obj    = value(model_base.objective)\n",
+        "\n",
+        "    print(f\"Objective (total benefit): {base_obj:.4f}\")\n",
+        "    print(f\"Total allocated: {sum(base_allocs):,.2f}  /  budget: {budget_total:,}\")\n",
+        "    print()\n",
+        "    print(f\"{'Option':<20} {'Category':<12} {'Allocated':>12} {'% of budget':>12}\")\n",
+        "    print(\"-\" * 60)\n",
+        "    for i in range(n):\n",
+        "        opt  = options_df.iloc[i, 0]\n",
+        "        cat  = options_df.iloc[i]['category']\n",
+        "        alloc_val = base_allocs[i]\n",
+        "        pct  = 100 * alloc_val / budget_total\n",
+        "        print(f\"{opt:<20} {cat:<12} {alloc_val:>12,.2f} {pct:>11.1f}%\")\n",
+        "    print()\n",
+        "    print(\"Category totals:\")\n",
+        "    for cat in categories:\n",
+        "        cat_idx   = options_df.index[options_df['category'] == cat].tolist()\n",
+        "        cat_total = sum(base_allocs[i] for i in cat_idx)\n",
+        "        print(f\"  {cat}: {cat_total:,.2f}  (min required: {min_alloc_per_category:,})\")\n",
+        "\n",
+        "elif model_base.status == -1:  # Infeasible\n",
+        "    print(\"⚠ INFEASIBLE — see Section 2.2 below for diagnosis and how to relax.\")\n",
+        "else:\n",
+        "    print(f\"Solver returned status: {LpStatus[model_base.status]}\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "fda17699",
+      "metadata": {
+        "id": "fda17699"
+      },
+      "source": [
+        "### 2.2 Feasibility Check and Interpretation\n",
+        "\n",
+        "**Instructions:** Check the Status from the cell above.\n",
+        "\n",
+        "- If **Optimal**: interpret the solution in 3–4 sentences. Which options received the most? Which category is closest to its minimum? Does the solution make intuitive sense?\n",
+        "- If **Infeasible**: diagnose which constraints interact to cause infeasibility (e.g. \"The category coverage minimum of $X combined with the concentration cap of Y% leaves no feasible room for...\"). Then go back and relax **one** constraint value in Section 0 (Loading Data), re-run the model, and document your reasoning below.\n",
+        "\n",
+        "**Status:** [Optimal / Infeasible — fill in after running]\n",
+        "\n",
+        "**Interpretation or infeasibility diagnosis:**\n",
+        "[TODO: 3–4 sentences.]\n",
+        "\n",
+        "**If you relaxed a constraint:** State which one, what value you changed it to, and why that relaxation is defensible in your field.\n",
+        "[TODO: Leave blank if Optimal on first run.]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "bea815d0",
+      "metadata": {
+        "id": "bea815d0"
+      },
+      "source": [
+        "### 2.3 Near-Optimal Alternative 1\n",
+        "\n",
+        "**Instructions:** Find an alternative solution within 5–10% of the base optimal objective by adding one additional constraint that forces a different allocation. The most straightforward approach: cap the top-allocated option at 70% of its base value. Re-solve and compare.\n",
+        "\n",
+        "The purpose: demonstrate that **multiple good solutions exist** (Lesson 3) and that the \"optimal\" is not the only defensible recommendation."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "04ffdedd",
+      "metadata": {
+        "id": "04ffdedd"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Identify the top-allocated option from the base solution ──────────────────\n",
+        "if model_base.status == 1:\n",
+        "    base_allocs  = [value(alloc[i]) for i in range(n)]\n",
+        "    top_idx      = int(np.argmax(base_allocs))\n",
+        "    top_val      = base_allocs[top_idx]\n",
+        "    top_name     = options_df.iloc[top_idx, 0]\n",
+        "    print(f\"Top-allocated option in base solution: {top_name}  (${top_val:,.2f})\")\n",
+        "    print(f\"Capping it at 70% of that value: ${0.70 * top_val:,.2f}\")\n",
+        "    print()\n",
+        "\n",
+        "    # ── Alternative 1: cap the top option at 70% of its base allocation ────────\n",
+        "    model_alt1   = LpProblem(\"Portfolio_Alt1\", LpMaximize)\n",
+        "    alloc_alt1   = [LpVariable(f\"a1_{i}\", lowBound=0) for i in range(n)]\n",
+        "\n",
+        "    model_alt1  += lpSum([alloc_alt1[i] * options_df.iloc[i][benefit_col]\n",
+        "                          for i in range(n)]), \"Total_Benefit\"\n",
+        "    model_alt1  += lpSum(alloc_alt1) <= budget_total, \"Budget_Cap\"\n",
+        "    for cat in categories:\n",
+        "        cat_idx  = options_df.index[options_df['category'] == cat].tolist()\n",
+        "        model_alt1 += (lpSum([alloc_alt1[i] for i in cat_idx]) >= min_alloc_per_category,\n",
+        "                       f\"Coverage_{cat}\")\n",
+        "    for i in range(n):\n",
+        "        model_alt1 += (alloc_alt1[i] <= concentration_cap * budget_total, f\"Cap_{i}\")\n",
+        "\n",
+        "    # The new constraint: limit the top option\n",
+        "    model_alt1  += alloc_alt1[top_idx] <= 0.70 * top_val, \"Alt1_Limit_Top\"\n",
+        "\n",
+        "    model_alt1.solve(PULP_CBC_CMD(msg=0))\n",
+        "    print(f\"Alt 1 Status: {LpStatus[model_alt1.status]}\")\n",
+        "\n",
+        "    if model_alt1.status == 1:\n",
+        "        alt1_allocs = [value(alloc_alt1[i]) for i in range(n)]\n",
+        "        alt1_obj    = value(model_alt1.objective)\n",
+        "        gap_pct     = 100 * (base_obj - alt1_obj) / base_obj\n",
+        "\n",
+        "        print(f\"Alt 1 Objective: {alt1_obj:.4f}  (gap from base: {gap_pct:.1f}%)\")\n",
+        "        print()\n",
+        "        print(f\"{'Option':<20} {'Base':>12} {'Alt 1':>12} {'Δ':>10}\")\n",
+        "        print(\"-\" * 58)\n",
+        "        for i in range(n):\n",
+        "            delta = alt1_allocs[i] - base_allocs[i]\n",
+        "            print(f\"{options_df.iloc[i,0]:<20} {base_allocs[i]:>12,.2f} \"\n",
+        "                  f\"{alt1_allocs[i]:>12,.2f} {delta:>+10,.2f}\")\n",
+        "    else:\n",
+        "        print(\"Alt 1 is infeasible with this cap — try a less restrictive limit (e.g. 0.80 instead of 0.70).\")\n",
+        "else:\n",
+        "    print(\"Fix infeasibility in Section 2.1 before running this cell.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "0865e5eb",
+      "metadata": {
+        "id": "0865e5eb"
+      },
+      "source": [
+        "### 2.4 Near-Optimal Alternative 2\n",
+        "\n",
+        "**Instructions:** Find a second alternative by adding a different constraint. Suggested approach: impose a maximum on the *second*-highest allocated option from the base solution (e.g. cap it at 70% of its base value), starting from the original base constraints (not Alt 1). Re-solve and compare."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "0e104093",
+      "metadata": {
+        "id": "0e104093"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Alternative 2: cap the second-highest option ──────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    sorted_idx    = sorted(range(n), key=lambda i: base_allocs[i], reverse=True)\n",
+        "    second_idx    = sorted_idx[1]   # second-highest in base solution\n",
+        "    second_val    = base_allocs[second_idx]\n",
+        "    second_name   = options_df.iloc[second_idx, 0]\n",
+        "    print(f\"Second-highest option in base: {second_name}  (${second_val:,.2f})\")\n",
+        "    print(f\"Capping it at 70% of that value: ${0.70 * second_val:,.2f}\")\n",
+        "    print()\n",
+        "\n",
+        "    model_alt2    = LpProblem(\"Portfolio_Alt2\", LpMaximize)\n",
+        "    alloc_alt2    = [LpVariable(f\"a2_{i}\", lowBound=0) for i in range(n)]\n",
+        "\n",
+        "    model_alt2   += lpSum([alloc_alt2[i] * options_df.iloc[i][benefit_col]\n",
+        "                           for i in range(n)]), \"Total_Benefit\"\n",
+        "    model_alt2   += lpSum(alloc_alt2) <= budget_total, \"Budget_Cap\"\n",
+        "    for cat in categories:\n",
+        "        cat_idx   = options_df.index[options_df['category'] == cat].tolist()\n",
+        "        model_alt2 += (lpSum([alloc_alt2[i] for i in cat_idx]) >= min_alloc_per_category,\n",
+        "                       f\"Coverage_{cat}\")\n",
+        "    for i in range(n):\n",
+        "        model_alt2 += (alloc_alt2[i] <= concentration_cap * budget_total, f\"Cap_{i}\")\n",
+        "\n",
+        "    # The new constraint: limit the second-highest option\n",
+        "    model_alt2   += alloc_alt2[second_idx] <= 0.70 * second_val, \"Alt2_Limit_Second\"\n",
+        "\n",
+        "    model_alt2.solve(PULP_CBC_CMD(msg=0))\n",
+        "    print(f\"Alt 2 Status: {LpStatus[model_alt2.status]}\")\n",
+        "\n",
+        "    if model_alt2.status == 1:\n",
+        "        alt2_allocs = [value(alloc_alt2[i]) for i in range(n)]\n",
+        "        alt2_obj    = value(model_alt2.objective)\n",
+        "        gap_pct2    = 100 * (base_obj - alt2_obj) / base_obj\n",
+        "\n",
+        "        print(f\"Alt 2 Objective: {alt2_obj:.4f}  (gap from base: {gap_pct2:.1f}%)\")\n",
+        "        print()\n",
+        "        print(f\"{'Option':<20} {'Base':>12} {'Alt 1':>12} {'Alt 2':>12}\")\n",
+        "        print(\"-\" * 60)\n",
+        "        for i in range(n):\n",
+        "            print(f\"{options_df.iloc[i,0]:<20} {base_allocs[i]:>12,.2f} \"\n",
+        "                  f\"{alt1_allocs[i]:>12,.2f} {alt2_allocs[i]:>12,.2f}\")\n",
+        "else:\n",
+        "    print(\"Fix infeasibility in Section 2.1 before running this cell.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "609f95bd",
+      "metadata": {
+        "id": "609f95bd"
+      },
+      "source": [
+        "### 2.5 Alternative Comparison and Interpretation\n",
+        "\n",
+        "**Instructions:** Compare the three solutions (base, Alt 1, Alt 2). For each alternative, explain in 2–3 sentences: what changed, what was sacrificed in objective value, and why a real stakeholder or decision-maker might actually prefer that alternative over the mathematically optimal base solution.\n",
+        "\n",
+        "**Base vs. Alt 1:**\n",
+        "[TODO: What changed and why a stakeholder might prefer Alt 1.]\n",
+        "\n",
+        "**Base vs. Alt 2:**\n",
+        "[TODO: What changed and why a stakeholder might prefer Alt 2.]\n",
+        "\n",
+        "**Key insight from near-optimal exploration:**\n",
+        "[TODO: 1–2 sentences on what this tells you about the robustness of the base recommendation.]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "1fb2fdde",
+      "metadata": {
+        "id": "1fb2fdde"
+      },
+      "source": [
+        "### 2.6 Base Solution Visualization\n",
+        "\n",
+        "**Instructions:** Create a bar chart of the base solution allocation by option, color-coded by category. Give it a clear title and labeled axes. Reference this chart in your executive summary."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "4d7ff74c",
+      "metadata": {
+        "id": "4d7ff74c"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Base solution visualization ───────────────────────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    fig, ax = plt.subplots(figsize=(10, 5))\n",
+        "\n",
+        "    # Color-code bars by category\n",
+        "    cat_list    = list(categories)\n",
+        "    colors_map  = {cat: c for cat, c in zip(cat_list, ['#2E75B6', '#ED7D31', '#70AD47'])}\n",
+        "    bar_colors  = [colors_map[options_df.iloc[i]['category']] for i in range(n)]\n",
+        "\n",
+        "    bars = ax.bar(options_df.iloc[:, 0], base_allocs, color=bar_colors, edgecolor='white')\n",
+        "\n",
+        "    # Annotation: concentration cap line\n",
+        "    ax.axhline(y=concentration_cap * budget_total, color='red', linestyle='--',\n",
+        "               linewidth=1.2, label=f'Concentration cap ({concentration_cap*100:.0f}% of budget)')\n",
+        "\n",
+        "    # Legend for categories\n",
+        "    handles = [plt.Rectangle((0,0),1,1, color=colors_map[c]) for c in cat_list]\n",
+        "    ax.legend(handles + [plt.Line2D([0],[0], color='red', linestyle='--')],\n",
+        "              cat_list + ['Concentration cap'], loc='upper right', fontsize=9)\n",
+        "\n",
+        "    ax.set_xlabel(\"Option\", fontsize=11)\n",
+        "    ax.set_ylabel(\"Amount Allocated\", fontsize=11)\n",
+        "    ax.set_title(\"Base Solution: Allocation by Option (color = category)\", fontsize=12, fontweight='bold')\n",
+        "    ax.tick_params(axis='x', rotation=45)\n",
+        "    plt.tight_layout()\n",
+        "    plt.show()\n",
+        "    print(\"Figure 1: Base solution allocation by option.\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility in Section 2.1 before visualizing.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "4daf5aab",
+      "metadata": {
+        "id": "4daf5aab"
+      },
+      "source": [
+        "---\n",
+        "## Part 3: Sensitivity Analysis and Validation\n",
+        "\n",
+        "### 3.1 Sensitivity Analysis — 5 Parameters at ±20% and ±40%\n",
+        "\n",
+        "**Instructions:** For each of your 5 key parameters (from Section 1.4), vary it at −40%, −20%, +20%, and +40% from its base value while holding all other parameters fixed. Record the objective value for each run. The code structure below tests all parameters in a loop — adapt the parameter names to match yours.\n",
+        "\n",
+        "**The 5 parameters to test:**\n",
+        "1. `benefit_rate` — shift all options' rates by the same percentage\n",
+        "2. `benefit_rate` (top option only) — vary only the rate for the option with the highest benefit_rate in your dataset\n",
+        "3. `budget_total`\n",
+        "4. `min_alloc_per_category`\n",
+        "5. `concentration_cap`"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "7cc0952e",
+      "metadata": {
+        "id": "7cc0952e"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Sensitivity analysis — 5 parameters, 4 deltas each ───────────────────────\n",
+        "if model_base.status != 1:\n",
+        "    print(\"Resolve infeasibility before running sensitivity analysis.\")\n",
+        "else:\n",
+        "    deltas     = [-0.40, -0.20, +0.20, +0.40]\n",
+        "    param_labels = [\n",
+        "        \"benefit_rate (all)\",\n",
+        "        \"benefit_rate (top option)\",\n",
+        "        \"budget_total\",\n",
+        "        \"min_alloc_per_category\",\n",
+        "        \"concentration_cap\",\n",
+        "    ]\n",
+        "\n",
+        "    # Store results: {param_label: {delta: obj_value or None}}\n",
+        "    sens_results = {p: {} for p in param_labels}\n",
+        "\n",
+        "    for delta in deltas:\n",
+        "        # ── P1: Shift all benefit_rates ────────────────────────────────────────\n",
+        "        m = LpProblem(\"sens\", LpMaximize)\n",
+        "        a = [LpVariable(f\"a_{i}\", lowBound=0) for i in range(n)]\n",
+        "        m += lpSum([a[i] * options_df.iloc[i][benefit_col] * (1 + delta) for i in range(n)])\n",
+        "        m += lpSum(a) <= budget_total\n",
+        "        for cat in categories:\n",
+        "            ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "            m += lpSum([a[i] for i in ci]) >= min_alloc_per_category\n",
+        "        for i in range(n):\n",
+        "            m += a[i] <= concentration_cap * budget_total\n",
+        "        m.solve(PULP_CBC_CMD(msg=0))\n",
+        "        sens_results[\"benefit_rate (all)\"][delta] = value(m.objective) if m.status == 1 else None\n",
+        "\n",
+        "        # ── P2: benefit_rate for top option only ───────────────────────────────\n",
+        "        top_benefit_idx = int(np.argmax(options_df[benefit_col].values))\n",
+        "        m = LpProblem(\"sens\", LpMaximize)\n",
+        "        a = [LpVariable(f\"a_{i}\", lowBound=0) for i in range(n)]\n",
+        "        m += lpSum([a[i] * (options_df.iloc[i][benefit_col] * (1 + delta) if i == top_benefit_idx else options_df.iloc[i][benefit_col]) for i in range(n)])\n",
+        "        m += lpSum(a) <= budget_total\n",
+        "        for cat in categories:\n",
+        "            ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "            m += lpSum([a[i] for i in ci]) >= min_alloc_per_category\n",
+        "        for i in range(n):\n",
+        "            m += a[i] <= concentration_cap * budget_total\n",
+        "        m.solve(PULP_CBC_CMD(msg=0))\n",
+        "        sens_results[\"benefit_rate (top option)\"][delta] = value(m.objective) if m.status == 1 else None\n",
+        "\n",
+        "        # ── P3: Budget total ───────────────────────────────────────────────────\n",
+        "        m = LpProblem(\"sens\", LpMaximize)\n",
+        "        a = [LpVariable(f\"a_{i}\", lowBound=0) for i in range(n)]\n",
+        "        m += lpSum([a[i] * options_df.iloc[i][benefit_col] for i in range(n)])\n",
+        "        m += lpSum(a) <= budget_total * (1 + delta)\n",
+        "        for cat in categories:\n",
+        "            ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "            m += lpSum([a[i] for i in ci]) >= min_alloc_per_category\n",
+        "        for i in range(n):\n",
+        "            m += a[i] <= concentration_cap * budget_total * (1 + delta)\n",
+        "        m.solve(PULP_CBC_CMD(msg=0))\n",
+        "        sens_results[\"budget_total\"][delta] = value(m.objective) if m.status == 1 else None\n",
+        "\n",
+        "        # ── P4: Min alloc per category ─────────────────────────────────────────\n",
+        "        new_min = min_alloc_per_category * (1 + delta)\n",
+        "        m = LpProblem(\"sens\", LpMaximize)\n",
+        "        a = [LpVariable(f\"a_{i}\", lowBound=0) for i in range(n)]\n",
+        "        m += lpSum([a[i] * options_df.iloc[i][benefit_col] for i in range(n)])\n",
+        "        m += lpSum(a) <= budget_total\n",
+        "        for cat in categories:\n",
+        "            ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "            m += lpSum([a[i] for i in ci]) >= new_min\n",
+        "        for i in range(n):\n",
+        "            m += a[i] <= concentration_cap * budget_total\n",
+        "        m.solve(PULP_CBC_CMD(msg=0))\n",
+        "        sens_results[\"min_alloc_per_category\"][delta] = value(m.objective) if m.status == 1 else None\n",
+        "\n",
+        "        # ── P5: Concentration cap ──────────────────────────────────────────────\n",
+        "        new_cap = concentration_cap * (1 + delta)\n",
+        "        m = LpProblem(\"sens\", LpMaximize)\n",
+        "        a = [LpVariable(f\"a_{i}\", lowBound=0) for i in range(n)]\n",
+        "        m += lpSum([a[i] * options_df.iloc[i][benefit_col] for i in range(n)])\n",
+        "        m += lpSum(a) <= budget_total\n",
+        "        for cat in categories:\n",
+        "            ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "            m += lpSum([a[i] for i in ci]) >= min_alloc_per_category\n",
+        "        for i in range(n):\n",
+        "            m += a[i] <= new_cap * budget_total\n",
+        "        m.solve(PULP_CBC_CMD(msg=0))\n",
+        "        sens_results[\"concentration_cap\"][delta] = value(m.objective) if m.status == 1 else None\n",
+        "\n",
+        "    # ── Display summary table ──────────────────────────────────────────────────\n",
+        "    print(f\"Base objective: {base_obj:.4f}\\n\")\n",
+        "    print(f\"{'Parameter':<28} {'−40%':>9} {'−20%':>9} {'Base':>9} {'+20%':>9} {'+40%':>9}\")\n",
+        "    print(\"-\" * 70)\n",
+        "    for p in param_labels:\n",
+        "        row = [sens_results[p].get(d) for d in deltas]\n",
+        "        def fmt(v): return f\"{v:.4f}\" if v is not None else \"infeas.\"\n",
+        "        print(f\"{p:<28} {fmt(row[0]):>9} {fmt(row[1]):>9} {base_obj:>9.4f} {fmt(row[2]):>9} {fmt(row[3]):>9}\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "89635470",
+      "metadata": {
+        "id": "89635470"
+      },
+      "source": [
+        "### 3.2 Sensitivity Summary Chart\n",
+        "\n",
+        "**Instructions:** Create a tornado chart (horizontal bar chart) showing the range of the objective value for each parameter across all tested deltas. Wider bars = more sensitive. Give the chart a clear title and labeled axes. Reference this as Figure 2 in your executive summary."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "1b69e2b2",
+      "metadata": {
+        "id": "1b69e2b2"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Tornado chart ─────────────────────────────────────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    ranges = {}\n",
+        "    for p in param_labels:\n",
+        "        vals = [v for v in sens_results[p].values() if v is not None]\n",
+        "        if vals:\n",
+        "            ranges[p] = max(vals) - min(vals)\n",
+        "        else:\n",
+        "            ranges[p] = 0.0   # infeasible across all deltas\n",
+        "\n",
+        "    sorted_params = sorted(ranges, key=ranges.get)\n",
+        "    sorted_ranges = [ranges[p] for p in sorted_params]\n",
+        "\n",
+        "    fig, ax = plt.subplots(figsize=(9, 4))\n",
+        "    bar_colors = ['#2E75B6' if r == max(sorted_ranges) else '#9DC3E6' for r in sorted_ranges]\n",
+        "    ax.barh(sorted_params, sorted_ranges, color=bar_colors, edgecolor='white')\n",
+        "    ax.set_xlabel(\"Range of Objective Value (max − min across ±20% and ±40%)\", fontsize=10)\n",
+        "    ax.set_title(\"Sensitivity Summary: Which Parameter Has the Most Impact?\", fontsize=11, fontweight='bold')\n",
+        "    ax.axvline(0, color='black', linewidth=0.8)\n",
+        "    plt.tight_layout()\n",
+        "    plt.show()\n",
+        "    print(\"Figure 2: Sensitivity tornado chart.\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility before plotting.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "c0902810",
+      "metadata": {
+        "id": "c0902810"
+      },
+      "source": [
+        "### 3.3 Most Critical Parameter\n",
+        "\n",
+        "**Instructions:** Based on the tornado chart and the sensitivity table, identify the single most critical parameter. Explain in 2–3 sentences why it matters most and what the decision-maker should do as a result (e.g. \"Monitor X closely because a 20% change in X shifts the optimal allocation more than any other factor...\").\n",
+        "\n",
+        "**Most critical parameter:** [TODO]\n",
+        "\n",
+        "**Why it matters most:**\n",
+        "[TODO: 2–3 sentences.]\n",
+        "\n",
+        "**What the decision-maker should do:**\n",
+        "[TODO: 1–2 sentences — concrete action or monitoring recommendation.]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "e3ee2ac0",
+      "metadata": {
+        "id": "e3ee2ac0"
+      },
+      "source": [
+        "### 3.4 Extreme Value Testing\n",
+        "\n",
+        "**Instructions:** Test what happens at the **absolute plausible limits** — not just ±40%, but the true worst-case and best-case values for your **most critical parameter** (the one you identified in Section 3.3). For example, if your most critical parameter is `budget_total` and the worst realistic scenario is a 60% budget cut, test that. Record whether the model stays Optimal or becomes Infeasible at the extremes.\n",
+        "\n",
+        "**Important:** The code below tests `budget_total` by default. If your most critical parameter is *not* `budget_total` (e.g. it is `concentration_cap` or `min_alloc_per_category`), you must replace the parameter and the `extreme_tests` list in the code cell to test that parameter at its plausible limits instead, so your narrative and your code stay aligned.\n",
+        "\n",
+        "**What extreme values did you choose, and why are they the plausible limits in your field?**\n",
+        "[TODO: 1–2 sentences before running the code.]"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "758e705a",
+      "metadata": {
+        "id": "758e705a"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Extreme value testing ─────────────────────────────────────────────────────\n",
+        "# Test your MOST CRITICAL parameter (from Section 3.3) at plausible limits.\n",
+        "# The example below uses budget_total. If your most critical parameter is different\n",
+        "# (e.g. concentration_cap or min_alloc_per_category), replace the variable and\n",
+        "# extreme_tests accordingly so the code matches your narrative.\n",
+        "if model_base.status == 1:\n",
+        "    extreme_tests = [\n",
+        "        (\"Worst case (e.g. −60%)\", budget_total * 0.40),\n",
+        "        (\"Moderate stress (−40%)\", budget_total * 0.60),\n",
+        "        (\"Base\",                   budget_total),\n",
+        "        (\"Best case (+50%)\",       budget_total * 1.50),\n",
+        "    ]\n",
+        "\n",
+        "    print(f\"{'Scenario':<30} {'Budget Used':>14} {'Obj. Value':>12} {'Status':>12}\")\n",
+        "    print(\"-\" * 72)\n",
+        "\n",
+        "    for label, test_budget in extreme_tests:\n",
+        "        m = LpProblem(\"extreme\", LpMaximize)\n",
+        "        a = [LpVariable(f\"a_{i}\", lowBound=0) for i in range(n)]\n",
+        "        m += lpSum([a[i] * options_df.iloc[i][benefit_col] for i in range(n)])\n",
+        "        m += lpSum(a) <= test_budget\n",
+        "        for cat in categories:\n",
+        "            ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "            m += lpSum([a[i] for i in ci]) >= min_alloc_per_category\n",
+        "        for i in range(n):\n",
+        "            m += a[i] <= concentration_cap * test_budget\n",
+        "        m.solve(PULP_CBC_CMD(msg=0))\n",
+        "\n",
+        "        if m.status == 1:\n",
+        "            print(f\"{label:<30} {test_budget:>14,.0f} {value(m.objective):>12.4f} {'✓ Optimal':>12}\")\n",
+        "        else:\n",
+        "            print(f\"{label:<30} {test_budget:>14,.0f} {'—':>12} {LpStatus[m.status]:>12}\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility before extreme value testing.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "c631821b",
+      "metadata": {
+        "id": "c631821b"
+      },
+      "source": [
+        "**Extreme value interpretation:**\n",
+        "[TODO: 2–3 sentences. At what point does the solution break down (become infeasible)? What does this tell the decision-maker about the limits of this model?]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "30df19c0",
+      "metadata": {
+        "id": "30df19c0"
+      },
+      "source": [
+        "### 3.5 One What-If Scenario\n",
+        "\n",
+        "**Instructions:** Run one scenario that tests a meaningful business change **not already covered by sensitivity analysis**. Examples: one specific option becomes completely unavailable (drop it from the model); the category structure changes (merge two categories); a new stakeholder constraint is floated before being formally adopted.\n",
+        "\n",
+        "**What scenario are you testing and why?**\n",
+        "[TODO: 1–2 sentences.]"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "840e3e5b",
+      "metadata": {
+        "id": "840e3e5b"
+      },
+      "outputs": [],
+      "source": [
+        "# ── What-if scenario ──────────────────────────────────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    # TODO: Implement your specific what-if scenario below.\n",
+        "    # Example: remove the top-performing option entirely (simulate it becoming unavailable)\n",
+        "    # and re-solve. Compare the new objective and allocation to the base.\n",
+        "\n",
+        "    # Identify which option to remove\n",
+        "    top_name  = options_df.iloc[top_idx, 0]\n",
+        "    print(f\"What-if: remove option '{top_name}' (e.g. it becomes unavailable)\")\n",
+        "    print()\n",
+        "\n",
+        "    whatif_df = options_df.drop(index=top_idx).reset_index(drop=True)\n",
+        "    n_wi      = len(whatif_df)\n",
+        "\n",
+        "    m_wi = LpProblem(\"whatif\", LpMaximize)\n",
+        "    a_wi = [LpVariable(f\"aw_{i}\", lowBound=0) for i in range(n_wi)]\n",
+        "\n",
+        "    m_wi += lpSum([a_wi[i] * whatif_df.iloc[i][benefit_col] for i in range(n_wi)])\n",
+        "    m_wi += lpSum(a_wi) <= budget_total\n",
+        "    for cat in categories:\n",
+        "        ci = whatif_df.index[whatif_df['category'] == cat].tolist()\n",
+        "        if ci:   # only add coverage constraint if category still has options\n",
+        "            m_wi += lpSum([a_wi[i] for i in ci]) >= min_alloc_per_category\n",
+        "    for i in range(n_wi):\n",
+        "        m_wi += a_wi[i] <= concentration_cap * budget_total\n",
+        "\n",
+        "    m_wi.solve(PULP_CBC_CMD(msg=0))\n",
+        "    print(f\"What-if Status: {LpStatus[m_wi.status]}\")\n",
+        "\n",
+        "    if m_wi.status == 1:\n",
+        "        wi_obj = value(m_wi.objective)\n",
+        "        print(f\"What-if Objective: {wi_obj:.4f}   |   Base Objective: {base_obj:.4f}\")\n",
+        "        print(f\"Impact on objective: {wi_obj - base_obj:+.4f}  ({100*(wi_obj-base_obj)/base_obj:+.1f}%)\")\n",
+        "    else:\n",
+        "        print(\"What-if scenario is infeasible — interpret this finding below.\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility in Section 2.1 before running what-if analysis.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "26baedb9",
+      "metadata": {
+        "id": "26baedb9"
+      },
+      "source": [
+        "**What-if interpretation:**\n",
+        "[TODO: 2–3 sentences. How did the recommendation change? Is the base solution fragile to this scenario?]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "9d95e455",
+      "metadata": {
+        "id": "9d95e455"
+      },
+      "source": [
+        "### 3.6 Sanity Checks\n",
+        "\n",
+        "**Instructions:** Perform 2–3 sanity checks on your base solution. Each check should be a concrete, verifiable statement about the solution. State the check, how you verified it, and whether it passed or failed.\n",
+        "\n",
+        "**Check 1:** [TODO — e.g. \"All allocations are non-negative.\"]\n",
+        "Result: [TODO — PASS / FAIL and one sentence of evidence.]\n",
+        "\n",
+        "**Check 2:** [TODO — e.g. \"The total allocated equals the budget (or is within rounding of it).\"]\n",
+        "Result: [TODO — PASS / FAIL.]\n",
+        "\n",
+        "**Check 3:** [TODO — e.g. \"No single option exceeds the concentration cap.\"]\n",
+        "Result: [TODO — PASS / FAIL.]"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b3297d48",
+      "metadata": {
+        "id": "b3297d48"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Sanity checks ─────────────────────────────────────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    base_allocs = [value(alloc[i]) for i in range(n)]\n",
+        "\n",
+        "    # Check 1: All allocations are non-negative\n",
+        "    check1 = all(v >= -1e-6 for v in base_allocs)\n",
+        "    print(f\"Check 1 (all allocations ≥ 0):        {'✓ PASS' if check1 else '✗ FAIL'}\")\n",
+        "\n",
+        "    # Check 2: Total does not exceed budget\n",
+        "    total_alloc = sum(base_allocs)\n",
+        "    check2 = total_alloc <= budget_total + 1e-4\n",
+        "    print(f\"Check 2 (total ≤ budget):              {'✓ PASS' if check2 else '✗ FAIL'}  \"\n",
+        "          f\"({total_alloc:,.2f} vs {budget_total:,})\")\n",
+        "\n",
+        "    # Check 3: Each category meets minimum coverage\n",
+        "    check3 = True\n",
+        "    for cat in categories:\n",
+        "        ci      = options_df.index[options_df['category'] == cat].tolist()\n",
+        "        cat_tot = sum(base_allocs[i] for i in ci)\n",
+        "        ok      = cat_tot >= min_alloc_per_category - 1e-4\n",
+        "        if not ok: check3 = False\n",
+        "        print(f\"Check 3 ({cat} coverage ≥ {min_alloc_per_category:,}): \"\n",
+        "              f\"{'✓ PASS' if ok else '✗ FAIL'}  ({cat_tot:,.2f})\")\n",
+        "\n",
+        "    # Check 4: No option exceeds concentration cap\n",
+        "    max_single    = max(base_allocs)\n",
+        "    cap_threshold = concentration_cap * budget_total\n",
+        "    check4        = max_single <= cap_threshold + 1e-4\n",
+        "    print(f\"Check 4 (no option > cap {cap_threshold:,.0f}): \"\n",
+        "          f\"{'✓ PASS' if check4 else '✗ FAIL'}  (max = {max_single:,.2f})\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility before running sanity checks.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "d4893190",
+      "metadata": {
+        "id": "d4893190"
+      },
+      "source": [
+        "### 3.7 Fragile vs. Robust Assessment\n",
+        "\n",
+        "**Instructions:** Based on your sensitivity analysis, extreme value testing, and what-if scenario, assess whether this solution is robust or fragile. Write 3–5 sentences suitable for a manager who will make the final decision.\n",
+        "\n",
+        "[TODO: 3–5 sentences. Which parts of the recommendation are stable across most scenarios? Which are sensitive? What should the decision-maker watch most closely? Is there a specific threshold the manager should monitor?]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "578dcbc7",
+      "metadata": {
+        "id": "578dcbc7"
+      },
+      "source": [
+        "---\n",
+        "## Part 4: Two Stakeholder Changes of Mind\n",
+        "\n",
+        "A stakeholder has changed their mind — twice. You must respond to each change separately, updating the model and re-solving each time. Then create a single three-way comparison visualization.\n",
+        "\n",
+        "### 4.1 Change 1 — New Constraint\n",
+        "\n",
+        "The stakeholder imposes a **new hard constraint**. Choose one from the list below or propose your own (check with your instructor first):\n",
+        "\n",
+        "- A specific option must receive a **minimum allocation** (e.g. a flagship product or a politically important program must get at least $X)\n",
+        "- A specific option must receive **zero** (e.g. a channel is suspended due to a policy change)\n",
+        "- A stricter **concentration cap** is imposed (e.g. reduced from 35% to 25%)\n",
+        "- A **new category** minimum is required (e.g. an emerging category must receive at least $Y)\n",
+        "\n",
+        "**Which change did you choose?** State it in one sentence, including the specific values.\n",
+        "[TODO: Your sentence.]\n",
+        "\n",
+        "**Why might a stakeholder impose this?** One sentence of business context.\n",
+        "[TODO: Your sentence.]"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "69a2db4e",
+      "metadata": {
+        "id": "69a2db4e"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Stakeholder Change 1: new constraint ──────────────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    # TODO: Replace the example below with your actual Change 1 constraint.\n",
+        "    # Example: a specific option must receive at least $8,000 (minimum allocation)\n",
+        "    forced_idx   = 2            # TODO: index of the option that must receive a minimum\n",
+        "    forced_name  = options_df.iloc[forced_idx, 0]\n",
+        "    forced_min   = 8000         # TODO: the required minimum allocation for that option\n",
+        "    print(f\"Change 1: {forced_name} must receive at least {forced_min:,}\")\n",
+        "\n",
+        "    model_c1  = LpProblem(\"Portfolio_C1\", LpMaximize)\n",
+        "    alloc_c1  = [LpVariable(f\"c1_{i}\", lowBound=0) for i in range(n)]\n",
+        "\n",
+        "    model_c1 += lpSum([alloc_c1[i] * options_df.iloc[i][benefit_col] for i in range(n)])\n",
+        "    model_c1 += lpSum(alloc_c1) <= budget_total,          \"Budget_Cap\"\n",
+        "    for cat in categories:\n",
+        "        ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "        model_c1 += lpSum([alloc_c1[i] for i in ci]) >= min_alloc_per_category, f\"Coverage_{cat}\"\n",
+        "    for i in range(n):\n",
+        "        model_c1 += alloc_c1[i] <= concentration_cap * budget_total, f\"Cap_{i}\"\n",
+        "\n",
+        "    # The new constraint\n",
+        "    model_c1 += alloc_c1[forced_idx] >= forced_min, \"C1_Forced_Min\"\n",
+        "\n",
+        "    model_c1.solve(PULP_CBC_CMD(msg=0))\n",
+        "    c1_status = LpStatus[model_c1.status]\n",
+        "    print(f\"Change 1 Status: {c1_status}\")\n",
+        "\n",
+        "    if model_c1.status == 1:\n",
+        "        c1_allocs = [value(alloc_c1[i]) for i in range(n)]\n",
+        "        c1_obj    = value(model_c1.objective)\n",
+        "        print(f\"Change 1 Objective: {c1_obj:.4f}   (vs base: {base_obj:.4f},  Δ = {c1_obj-base_obj:+.4f})\")\n",
+        "    else:\n",
+        "        c1_allocs = [0.0] * n\n",
+        "        c1_obj    = None\n",
+        "        print(\"Change 1 is infeasible — this is a valid finding. Explain it in Section 4.2.\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility in Section 2.1 before running stakeholder changes.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "fc8b32a9",
+      "metadata": {
+        "id": "fc8b32a9"
+      },
+      "source": [
+        "**Change 1 impact analysis:**\n",
+        "[TODO: 3–5 sentences. What shifted in the allocation? If infeasible, explain why the new constraint cannot be satisfied alongside the existing ones. What would you tell the stakeholder?]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "28f699d3",
+      "metadata": {
+        "id": "28f699d3"
+      },
+      "source": [
+        "### 4.2 Change 2 — Objective or Scope Shift\n",
+        "\n",
+        "The stakeholder reframes the **goal** or changes the **scope** of the problem. Choose one from the list below or propose your own:\n",
+        "\n",
+        "- **Flip the objective:** instead of maximizing total benefit, **minimize total spending** while requiring that total benefit reaches at least 85% of the base-optimal objective value\n",
+        "- **Add two new options** to your dataset (generate them from the LLM) and re-run the full model — does the original recommendation hold?\n",
+        "- **Change the objective weight:** instead of maximizing total benefit, maximize **total benefit minus a risk penalty** (benefit_rate − k × your_field_column, where k is a small penalty factor you choose)\n",
+        "\n",
+        "**Which change did you choose?** State it in one sentence.\n",
+        "[TODO: Your sentence.]\n",
+        "\n",
+        "**Why does this change reflect a real stakeholder concern?** One sentence.\n",
+        "[TODO: Your sentence.]"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "e8e3f3c7",
+      "metadata": {
+        "id": "e8e3f3c7"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Stakeholder Change 2: objective or scope shift ────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    # TODO: Replace the example below with your actual Change 2.\n",
+        "    # Example: flip to minimizing spending while achieving at least 90% of base benefit.\n",
+        "    benefit_floor = 0.90 * base_obj\n",
+        "    print(f\"Change 2: minimize total spending while achieving at least {benefit_floor:.4f} benefit\")\n",
+        "\n",
+        "    model_c2  = LpProblem(\"Portfolio_C2\", LpMinimize)\n",
+        "    alloc_c2  = [LpVariable(f\"c2_{i}\", lowBound=0) for i in range(n)]\n",
+        "\n",
+        "    # New objective: minimize total spending\n",
+        "    model_c2 += lpSum(alloc_c2), \"Total_Spending\"\n",
+        "\n",
+        "    # Original constraints\n",
+        "    model_c2 += lpSum(alloc_c2) <= budget_total, \"Budget_Cap\"\n",
+        "    for cat in categories:\n",
+        "        ci = options_df.index[options_df['category'] == cat].tolist()\n",
+        "        model_c2 += lpSum([alloc_c2[i] for i in ci]) >= min_alloc_per_category, f\"Coverage_{cat}\"\n",
+        "    for i in range(n):\n",
+        "        model_c2 += alloc_c2[i] <= concentration_cap * budget_total, f\"Cap_{i}\"\n",
+        "\n",
+        "    # New constraint: total benefit must meet the floor\n",
+        "    model_c2 += (lpSum([alloc_c2[i] * options_df.iloc[i][benefit_col] for i in range(n)])\n",
+        "                 >= benefit_floor, \"Benefit_Floor\")\n",
+        "\n",
+        "    model_c2.solve(PULP_CBC_CMD(msg=0))\n",
+        "    c2_status = LpStatus[model_c2.status]\n",
+        "    print(f\"Change 2 Status: {c2_status}\")\n",
+        "\n",
+        "    if model_c2.status == 1:\n",
+        "        c2_allocs  = [value(alloc_c2[i]) for i in range(n)]\n",
+        "        c2_spending = sum(c2_allocs)\n",
+        "        c2_obj      = value(model_c2.objective)\n",
+        "        print(f\"Change 2 Total Spending: {c2_spending:,.2f}  (base spending was: {sum(base_allocs):,.2f})\")\n",
+        "        print(f\"Spending saved vs base: {sum(base_allocs) - c2_spending:,.2f}\")\n",
+        "    else:\n",
+        "        c2_allocs = [0.0] * n\n",
+        "        c2_obj    = None\n",
+        "        print(\"Change 2 is infeasible. Consider raising the benefit floor or relaxing another constraint.\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility in Section 2.1 before running stakeholder changes.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "26b5e36d",
+      "metadata": {
+        "id": "26b5e36d"
+      },
+      "source": [
+        "**Change 2 impact analysis:**\n",
+        "[TODO: 3–5 sentences. What changed in the recommendation? How does this alternative framing change the decision? What would you tell the stakeholder about the trade-off?]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "41dc4241",
+      "metadata": {
+        "id": "41dc4241"
+      },
+      "source": [
+        "### 4.3 Three-Way Comparison Visualization\n",
+        "\n",
+        "**Instructions:** Create a grouped bar chart comparing the allocation for each option across Base, Change 1, and Change 2. Give the chart a clear title, labeled axes, and a legend. Reference this as Figure 3 in your executive summary. Refer to it in 1–2 sentences below."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "af061247",
+      "metadata": {
+        "id": "af061247"
+      },
+      "outputs": [],
+      "source": [
+        "# ── Three-way comparison chart ────────────────────────────────────────────────\n",
+        "if model_base.status == 1:\n",
+        "    x      = np.arange(n)\n",
+        "    width  = 0.27\n",
+        "    labels = options_df.iloc[:, 0].tolist()\n",
+        "\n",
+        "    # Use zeros for infeasible scenarios so the chart still renders\n",
+        "    c1_plot = c1_allocs if (model_c1.status == 1) else [0.0] * n\n",
+        "    c2_plot = c2_allocs if (model_c2.status == 1) else [0.0] * n\n",
+        "\n",
+        "    fig, ax = plt.subplots(figsize=(12, 5))\n",
+        "    ax.bar(x - width, base_allocs, width, label='Base',     color='#2E75B6')\n",
+        "    ax.bar(x,         c1_plot,     width, label='Change 1', color='#ED7D31')\n",
+        "    ax.bar(x + width, c2_plot,     width, label='Change 2', color='#70AD47')\n",
+        "\n",
+        "    ax.set_xticks(x)\n",
+        "    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=9)\n",
+        "    ax.set_xlabel(\"Option\", fontsize=11)\n",
+        "    ax.set_ylabel(\"Amount Allocated\", fontsize=11)\n",
+        "    ax.set_title(\"Three-Way Comparison: Base vs. Stakeholder Change 1 vs. Change 2\",\n",
+        "                 fontsize=12, fontweight='bold')\n",
+        "    ax.legend(fontsize=10)\n",
+        "    plt.tight_layout()\n",
+        "    plt.show()\n",
+        "    print(\"Figure 3: Three-way allocation comparison.\")\n",
+        "else:\n",
+        "    print(\"Resolve infeasibility in Section 2.1 before plotting.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "1d8a379e",
+      "metadata": {
+        "id": "1d8a379e"
+      },
+      "source": [
+        "[TODO: Refer to Figure 3 in 1–2 sentences. What does the chart show about how each stakeholder change shifted the allocation?]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "a0765131",
+      "metadata": {
+        "id": "a0765131"
+      },
+      "source": [
+        "---\n",
+        "## Part 5: Executive Summary\n",
+        "\n",
+        "**Instructions:** Write a professional summary suitable for presenting to a decision-maker who will not read the code. Complete all subsections below. The total length should be **400–700 words**. No placeholder text or [TODO] may remain in your final submission. Reference at least two figures by name (e.g. \"As shown in Figure 1…\", \"Figure 2 shows…\").\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### Decision and Model\n",
+        "\n",
+        "[TODO: 2–3 sentences. What allocation decision are you addressing, in what field, and what does the model recommend at a high level? Describe all three constraints and why they exist.]\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### Near-Optimal Alternatives\n",
+        "\n",
+        "[TODO: 2–3 sentences. What do the two near-optimal alternatives look like, and why might a stakeholder prefer one of them over the strictly optimal solution? Reference Figure 1 if helpful.]\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### Sensitivity and Uncertainty\n",
+        "\n",
+        "[TODO: 2–3 sentences. Which of the five parameters matters most (reference Figure 2), and what should the decision-maker monitor? What did extreme value testing reveal?]\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### Stakeholder Changes\n",
+        "\n",
+        "[TODO: 3–4 sentences. How did each stakeholder change affect the recommendation? Was either change infeasible, and what does that tell us? Reference Figure 3.]\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### Final Recommendation\n",
+        "\n",
+        "[TODO: 2–3 sentences. Given everything above, what is your recommendation? What conditions would change it?]\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### Key Insights\n",
+        "\n",
+        "[TODO: 2–3 sentences. What did you learn about how model assumptions, constraint interactions, and stakeholder priorities interact in this decision?]"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "0c0639da",
+      "metadata": {
+        "id": "0c0639da"
+      },
+      "source": [
+        "---\n",
+        "## Submission Checklist\n",
+        "\n",
+        "Run through every item before submitting:\n",
+        "\n",
+        "- **Executive Summary complete?** All six subsections filled in. No \"[TODO]\" or placeholder text anywhere in the notebook.\n",
+        "- **All cells run top to bottom without errors?** Restart kernel, run all cells, verify.\n",
+        "- **Dataset has 8–10 rows and 4 columns?** Including a `category` column with exactly 3 distinct groups.\n",
+        "- **Three constraints in the model?** Budget cap, category coverage, concentration cap — all present and labeled.\n",
+        "- **Feasibility checked after every solve?** Status printed and interpreted for base, Alt 1, Alt 2, Change 1, and Change 2.\n",
+        "- **Near-optimal alternatives within 5–10% of base?** Gap percentage printed in Sections 2.3 and 2.4.\n",
+        "- **Sensitivity covers 5 parameters at ±20% and ±40%?** Table and tornado chart (Figure 2) both present.\n",
+        "- **Extreme value testing included?** At least two values beyond ±40% tested in Section 3.4.\n",
+        "- **Three-way comparison chart present and labeled?** Figure 3 has title, axis labels, and legend.\n",
+        "- **At least two figure references in Executive Summary?** Figures 1, 2, or 3 named explicitly.\n",
+        "- **GitHub repo accessible?** Notebook pushed; README with your name present.\n",
+        "\n",
+        "The rubric used for grading is provided separately."
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "Python 3",
+      "language": "python",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.10.0"
+    },
+    "colab": {
+      "provenance": [],
+      "include_colab_link": true
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
